@@ -29,10 +29,9 @@ services:
   clickhouse:
     image: clickhouse/clickhouse-server:latest
     environment:
+      # Dev image: default superuser, no SQL GRANT init (avoids init failures on system.*).
       CLICKHOUSE_DB: demo
-      CLICKHOUSE_USER: demo
-      CLICKHOUSE_PASSWORD: demo
-      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+      CLICKHOUSE_SKIP_USER_SETUP: "1"
     ports:
       - "8123:8123"
       - "9000:9000"
@@ -40,13 +39,11 @@ services:
       nofile:
         soft: 262144
         hard: 262144
-    volumes:
-      - "./clickhouse/init:/docker-entrypoint-initdb.d:ro"
     healthcheck:
-      test: ["CMD-SHELL", "clickhouse-client --user demo --password demo --query 'SELECT 1'"]
+      test: ["CMD-SHELL", "clickhouse-client --query 'SELECT 1'"]
       interval: 5s
       retries: 20
-      start_period: 20s
+      start_period: 30s
 
   backend:
     build: ./backend
@@ -61,7 +58,7 @@ services:
       PG_DSN: postgres://demo:demo@postgres:5432/demo?sslmode=disable
       MYSQL_DSN: demo:demo@tcp(mysql:3306)/demo?parseTime=true&loc=UTC
       SQLITE_PATH: /data/sqlite.db
-      CLICKHOUSE_DSN: clickhouse://demo:demo@clickhouse:9000/demo
+      CLICKHOUSE_DSN: clickhouse://default@clickhouse:9000/demo
       LISTEN: ":8080"
     volumes:
       - "./data:/data"

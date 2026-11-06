@@ -20,7 +20,7 @@ func FromEnv() (pgDSN, mysqlDSN, sqlitePath, chDSN, listen string) {
 	}
 	chDSN = os.Getenv("CLICKHOUSE_DSN")
 	if chDSN == "" {
-		chDSN = "clickhouse://demo:demo@127.0.0.1:9000/demo"
+		chDSN = "clickhouse://default@127.0.0.1:9000/demo"
 	}
 	listen = os.Getenv("LISTEN")
 	if listen == "" {

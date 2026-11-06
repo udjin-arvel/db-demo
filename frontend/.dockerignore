@@ -1,0 +1,9 @@
+node_modules
+.output
+.nitro
+dist
+.git
+.gitignore
+*.md
+.env
+.env.*

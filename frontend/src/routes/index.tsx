@@ -78,7 +78,7 @@ function Index() {
             <span className="text-ch">ClickHouse</span> против PostgreSQL, MySQL и SQLite<br />на <span className="text-primary glow-text">одинаковых данных</span>
           </h1>
           <p className="mt-5 text-muted-foreground">
-            3 000 000 событий, 50 000 пользователей, 5 фиксированных запросов. Columnar OLAP (ClickHouse) против row-store — он должен выиграть на агрегациях Q1–Q4 и проиграть на point lookup Q5.
+            5 000 000 событий, 50 000 пользователей, 5 фиксированных запросов. Columnar OLAP (ClickHouse) против row-store — он должен выиграть на агрегациях Q1–Q4 и проиграть на point lookup Q5.
             <span className="caret ml-1 text-primary">▌</span>
           </p>
         </section>
