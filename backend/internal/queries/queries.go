@@ -61,20 +61,12 @@ func SQLAndArgs(qid string, d Dialect) (sql string, args []any) {
 		sql = `SELECT user_id, COUNT(*) AS cnt FROM events GROUP BY user_id ORDER BY cnt DESC LIMIT 10`
 		return sql, nil
 	case "q4":
-		switch d {
-		case ClickHouse:
-			sql = `SELECT u.region, sum(e.value) AS sum FROM events e JOIN users u ON e.user_id = u.id WHERE u.segment = 'premium' GROUP BY u.region`
-		default:
-			sql = `SELECT u.region, SUM(e.value) AS sum FROM events e JOIN users u ON e.user_id = u.id WHERE u.segment = 'premium' GROUP BY u.region`
-		}
+		sql = `SELECT u.region, SUM(e.value) AS sum FROM events e JOIN users u ON e.user_id = u.id WHERE u.segment = 'premium' GROUP BY u.region`
 		return sql, nil
 	case "q5":
 		switch d {
 		case Postgres:
 			sql = `SELECT id, user_id, event_type, created_at, value, payload FROM events WHERE id = $1`
-			args = []any{Q5ID}
-		case ClickHouse:
-			sql = `SELECT id, user_id, event_type, created_at, value, payload FROM events WHERE id = ?`
 			args = []any{Q5ID}
 		default:
 			sql = `SELECT id, user_id, event_type, created_at, value, payload FROM events WHERE id = ?`
