@@ -19,7 +19,7 @@ import (
 )
 
 func main() {
-	pgDSN, mysqlDSN, sqlitePath, listen := config.FromEnv()
+	pgDSN, mysqlDSN, sqlitePath, chDSN, listen := config.FromEnv()
 
 	pg, err := db.OpenPostgres(pgDSN)
 	if err != nil {
@@ -42,10 +42,17 @@ func main() {
 	}
 	defer sl.Close()
 
+	ch, err := db.OpenClickHouse(chDSN)
+	if err != nil {
+		log.Fatalf("clickhouse open: %v", err)
+	}
+	defer ch.Close()
+
 	h := &api.Handler{
-		PG:     &db.Pool{DB: pg},
-		MySQL:  &db.Pool{DB: my},
-		SQLite: &db.Pool{DB: sl},
+		PG:         &db.Pool{DB: pg},
+		MySQL:      &db.Pool{DB: my},
+		SQLite:     &db.Pool{DB: sl},
+		ClickHouse: &db.Pool{DB: ch},
 	}
 
 	r := chi.NewRouter()

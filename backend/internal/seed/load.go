@@ -9,11 +9,30 @@ import (
 	"strings"
 	"time"
 
+	ch "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/jackc/pgx/v5"
-	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/shopspring/decimal"
 )
 
-func WaitHealthy(ctx context.Context, pg, my *sql.DB) error {
+func execPgxStmts(ctx context.Context, conn *pgx.Conn, stmts []string) error {
+	for _, q := range stmts {
+		if _, err := conn.Exec(ctx, q); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func execSQLStmts(ctx context.Context, db *sql.DB, stmts []string) error {
+	for _, q := range stmts {
+		if _, err := db.ExecContext(ctx, q); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func WaitHealthy(ctx context.Context, pg *pgx.Conn, my, ch *sql.DB) error {
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 	for {
@@ -21,57 +40,46 @@ func WaitHealthy(ctx context.Context, pg, my *sql.DB) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
-			if pg.PingContext(ctx) == nil && my.PingContext(ctx) == nil {
+			if pg.Ping(ctx) == nil && my.PingContext(ctx) == nil && ch.PingContext(ctx) == nil {
 				return nil
 			}
 		}
 	}
 }
 
-func LoadPostgres(ctx context.Context, db *sql.DB, users []UserRow, nEvents, batch, nUsers int64, rng *rand.Rand) error {
-	if _, err := db.ExecContext(ctx, PostgresDrop+PostgresCreate); err != nil {
+// LoadPostgres uses a native pgx connection so CopyFrom runs on *pgx.Conn (not database/sql).
+func LoadPostgres(ctx context.Context, conn *pgx.Conn, users []UserRow, nEvents, batch, nUsers int64, rng *rand.Rand) error {
+	if err := execPgxStmts(ctx, conn, PostgresDropStmts); err != nil {
 		return fmt.Errorf("pg schema: %w", err)
 	}
-	if err := insertUsersPG(ctx, db, users); err != nil {
+	if err := execPgxStmts(ctx, conn, PostgresCreateStmts); err != nil {
+		return fmt.Errorf("pg schema: %w", err)
+	}
+	if err := insertUsersPG(ctx, conn, users); err != nil {
 		return err
 	}
-	conn, err := db.Conn(ctx)
-	if err != nil {
-		return err
-	}
-	defer conn.Close()
-
-	err = conn.Raw(func(driverConn interface{}) error {
-		pgc, ok := driverConn.(*stdlib.Conn)
-		if !ok {
-			return fmt.Errorf("postgres copy: expected *pgx.Conn, got %T", driverConn)
+	src := &pgEventsSource{nEvents: nEvents, batch: batch, nUsers: nUsers}
+	for {
+		n, has := src.nextBatchSize()
+		if !has {
+			break
 		}
-		src := &pgEventsSource{nEvents: nEvents, batch: batch, nUsers: nUsers}
-		for {
-			n, has := src.nextBatchSize()
-			if !has {
-				return nil
-			}
-			src.buf = src.buf[:n]
-			GenEventsBatch(src.buf, src.nextStartID, nUsers, rng)
-			count, err := pgc.CopyFrom(ctx, pgx.Identifier{"events"}, []string{"id", "user_id", "event_type", "created_at", "value", "payload"}, src)
-			if err != nil {
-				return fmt.Errorf("copy at id %d: %w", src.nextStartID, err)
-			}
-			if int64(count) != n {
-				return fmt.Errorf("copy: expected %d rows, got %d", n, count)
-			}
-			src.done += n
-			src.nextStartID += n
-			if src.done%500000 == 0 || src.done == nEvents {
-				log.Printf("postgres events: %d / %d", src.done, nEvents)
-			}
+		src.buf = src.buf[:n]
+		GenEventsBatch(src.buf, src.nextStartID, nUsers, rng)
+		count, err := conn.CopyFrom(ctx, pgx.Identifier{"events"}, []string{"id", "user_id", "event_type", "created_at", "value", "payload"}, src)
+		if err != nil {
+			return fmt.Errorf("copy at id %d: %w", src.nextStartID, err)
 		}
-	})
-	if err != nil {
-		return err
+		if int64(count) != n {
+			return fmt.Errorf("copy: expected %d rows, got %d", n, count)
+		}
+		src.done += n
+		src.nextStartID += n
+		if src.done%500000 == 0 || src.done == nEvents {
+			log.Printf("postgres events: %d / %d", src.done, nEvents)
+		}
 	}
-	if _, err := db.ExecContext(ctx, IndexPostgres); err != nil {
+	if err := execPgxStmts(ctx, conn, IndexPostgresStmts); err != nil {
 		return fmt.Errorf("pg index: %w", err)
 	}
 	return nil
@@ -119,28 +127,22 @@ func (s *pgEventsSource) Values() ([]interface{}, error) {
 
 func (s *pgEventsSource) Err() error { return nil }
 
-func insertUsersPG(ctx context.Context, db *sql.DB, users []UserRow) error {
-	tx, err := db.BeginTx(ctx, nil)
+func insertUsersPG(ctx context.Context, conn *pgx.Conn, users []UserRow) error {
+	tx, err := conn.Begin(ctx)
 	if err != nil {
-		return err
-	}
-	stmt, err := tx.PrepareContext(ctx, `INSERT INTO users (id, region, segment) VALUES ($1,$2,$3)`)
-	if err != nil {
-		_ = tx.Rollback()
 		return err
 	}
 	for _, u := range users {
-		if _, err := stmt.ExecContext(ctx, u.ID, u.Region, u.Segment); err != nil {
-			_ = tx.Rollback()
+		if _, err := tx.Exec(ctx, `INSERT INTO users (id, region, segment) VALUES ($1,$2,$3)`, u.ID, u.Region, u.Segment); err != nil {
+			_ = tx.Rollback(ctx)
 			return err
 		}
 	}
-	_ = stmt.Close()
-	return tx.Commit()
+	return tx.Commit(ctx)
 }
 
 func LoadMySQL(ctx context.Context, db *sql.DB, users []UserRow, nEvents, batch, nUsers int64, rng *rand.Rand) error {
-	if _, err := db.ExecContext(ctx, MySQLDrop+MySQLCreate); err != nil {
+	if err := execSQLStmts(ctx, db, MySQLSchemaStmts); err != nil {
 		return fmt.Errorf("mysql schema: %w", err)
 	}
 	if err := insertUsersMySQL(ctx, db, users); err != nil {
@@ -181,7 +183,7 @@ func LoadMySQL(ctx context.Context, db *sql.DB, users []UserRow, nEvents, batch,
 			log.Printf("mysql events: %d / %d", done, nEvents)
 		}
 	}
-	if _, err := db.ExecContext(ctx, IndexMySQL); err != nil {
+	if err := execSQLStmts(ctx, db, IndexMySQLStmts); err != nil {
 		return fmt.Errorf("mysql index: %w", err)
 	}
 	return nil
@@ -208,7 +210,10 @@ func insertUsersMySQL(ctx context.Context, db *sql.DB, users []UserRow) error {
 }
 
 func LoadSQLite(ctx context.Context, db *sql.DB, users []UserRow, nEvents, batch, nUsers int64, rng *rand.Rand) error {
-	if _, err := db.ExecContext(ctx, SQLiteDrop+SQLiteCreate); err != nil {
+	if err := execSQLStmts(ctx, db, SQLiteDropStmts); err != nil {
+		return fmt.Errorf("sqlite schema: %w", err)
+	}
+	if err := execSQLStmts(ctx, db, SQLiteCreateStmts); err != nil {
 		return fmt.Errorf("sqlite schema: %w", err)
 	}
 	if _, err := db.ExecContext(ctx, `PRAGMA journal_mode=WAL`); err != nil {
@@ -258,7 +263,7 @@ func LoadSQLite(ctx context.Context, db *sql.DB, users []UserRow, nEvents, batch
 	if _, err := db.ExecContext(ctx, `PRAGMA synchronous=NORMAL`); err != nil {
 		return err
 	}
-	if _, err := db.ExecContext(ctx, IndexSQLite); err != nil {
+	if err := execSQLStmts(ctx, db, IndexSQLiteStmts); err != nil {
 		return fmt.Errorf("sqlite index: %w", err)
 	}
 	if _, err := db.ExecContext(ctx, `ANALYZE`); err != nil {
@@ -293,5 +298,85 @@ func Counts(ctx context.Context, db *sql.DB) (ev, us int, err error) {
 		return
 	}
 	err = db.QueryRowContext(ctx, `SELECT COUNT(*) FROM users`).Scan(&us)
+	return
+}
+
+// LoadClickHouse creates tables and loads data via the native clickhouse-go batch API.
+func LoadClickHouse(ctx context.Context, dsn string, users []UserRow, nEvents, batch, nUsers int64, rng *rand.Rand) error {
+	opt, err := ch.ParseDSN(dsn)
+	if err != nil {
+		return fmt.Errorf("clickhouse dsn: %w", err)
+	}
+	conn, err := ch.Open(opt)
+	if err != nil {
+		return fmt.Errorf("clickhouse open: %w", err)
+	}
+	defer conn.Close()
+
+	for _, q := range ClickHouseDropStmts {
+		if err := conn.Exec(ctx, q); err != nil {
+			return fmt.Errorf("clickhouse schema: %w", err)
+		}
+	}
+	for _, q := range ClickHouseCreateStmts {
+		if err := conn.Exec(ctx, q); err != nil {
+			return fmt.Errorf("clickhouse schema: %w", err)
+		}
+	}
+
+	ub, err := conn.PrepareBatch(ctx, "INSERT INTO users")
+	if err != nil {
+		return fmt.Errorf("clickhouse users batch: %w", err)
+	}
+	for _, u := range users {
+		if err := ub.Append(u.ID, u.Region, u.Segment); err != nil {
+			return fmt.Errorf("clickhouse users append: %w", err)
+		}
+	}
+	if err := ub.Send(); err != nil {
+		return fmt.Errorf("clickhouse users send: %w", err)
+	}
+
+	buf := make([]EventRow, batch)
+	var done int64
+	for done < nEvents {
+		n := batch
+		if n > nEvents-done {
+			n = nEvents - done
+		}
+		GenEventsBatch(buf[:n], done+1, nUsers, rng)
+
+		eb, err := conn.PrepareBatch(ctx, "INSERT INTO events")
+		if err != nil {
+			return fmt.Errorf("clickhouse events batch at %d: %w", done, err)
+		}
+		for i := 0; i < int(n); i++ {
+			ev := buf[i]
+			val, err := decimal.NewFromString(ev.Value)
+			if err != nil {
+				return fmt.Errorf("clickhouse decimal: %w", err)
+			}
+			if err := eb.Append(ev.ID, ev.UserID, ev.EventType, ev.CreatedAt, val, ev.Payload); err != nil {
+				return fmt.Errorf("clickhouse events append: %w", err)
+			}
+		}
+		if err := eb.Send(); err != nil {
+			return fmt.Errorf("clickhouse events send at %d: %w", done, err)
+		}
+		done += n
+		if done%500000 == 0 || done == nEvents {
+			log.Printf("clickhouse events: %d / %d", done, nEvents)
+		}
+	}
+	return nil
+}
+
+// CountsPostgres reads row counts via pgx.
+func CountsPostgres(ctx context.Context, conn *pgx.Conn) (ev, us int, err error) {
+	err = conn.QueryRow(ctx, `SELECT COUNT(*) FROM events`).Scan(&ev)
+	if err != nil {
+		return
+	}
+	err = conn.QueryRow(ctx, `SELECT COUNT(*) FROM users`).Scan(&us)
 	return
 }

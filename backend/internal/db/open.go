@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	_ "github.com/ClickHouse/clickhouse-go/v2"
 	_ "github.com/go-sql-driver/mysql"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	_ "modernc.org/sqlite"
@@ -38,6 +39,16 @@ func OpenSQLite(path string) (*sql.DB, error) {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1)
+	return db, nil
+}
+
+func OpenClickHouse(dsn string) (*sql.DB, error) {
+	db, err := sql.Open("clickhouse", dsn)
+	if err != nil {
+		return nil, err
+	}
+	db.SetMaxOpenConns(8)
+	db.SetConnMaxLifetime(10 * time.Minute)
 	return db, nil
 }
 

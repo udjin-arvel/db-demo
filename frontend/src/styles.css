@@ -54,6 +54,8 @@
   --color-sidebar: var(--sidebar);
   --color-header: var(--header);
   --color-warning: var(--warning);
+  --color-ch: var(--ch);
+  --color-ch-foreground: var(--ch-foreground);
   --font-sans: "Manrope", sans-serif;
   --font-mono: "JetBrains Mono", monospace;
   --shadow-glow: var(--glow);
@@ -86,6 +88,8 @@
   --destructive: oklch(0.66 0.2 25);
   --destructive-foreground: oklch(0.98 0 0);
   --warning: oklch(0.82 0.15 85);
+  --ch: oklch(0.9 0.18 105);
+  --ch-foreground: oklch(0.18 0.03 105);
   --border: oklch(0.34 0.02 160);
   --input: oklch(0.34 0.02 160);
   --ring: oklch(0.84 0.2 158);

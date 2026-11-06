@@ -76,6 +76,43 @@ func StatusSQLite(ctx context.Context, db *sql.DB) TableStatus {
 	return st
 }
 
+func StatusClickHouse(ctx context.Context, db *sql.DB) TableStatus {
+	var st TableStatus
+	ev, err := count(ctx, db, "events")
+	if err != nil {
+		st.Err = err.Error()
+		return st
+	}
+	us, err := count(ctx, db, "users")
+	if err != nil {
+		st.Err = err.Error()
+		return st
+	}
+	sz, err := chTableBytes(ctx, db)
+	if err != nil {
+		st.Err = err.Error()
+		return st
+	}
+	st.Events, st.Users, st.SizeB = ev, us, sz
+	return st
+}
+
+func chTableBytes(ctx context.Context, db *sql.DB) (int64, error) {
+	var b sql.NullInt64
+	err := db.QueryRowContext(ctx, `
+		SELECT COALESCE(sum(bytes_on_disk), 0)
+		FROM system.parts
+		WHERE database = currentDatabase() AND table IN ('events', 'users') AND active
+	`).Scan(&b)
+	if err != nil {
+		return 0, err
+	}
+	if b.Valid {
+		return b.Int64, nil
+	}
+	return 0, nil
+}
+
 func count(ctx context.Context, db *sql.DB, table string) (int, error) {
 	var n int
 	err := db.QueryRowContext(ctx, fmt.Sprintf("SELECT COUNT(*) FROM %s", table)).Scan(&n)

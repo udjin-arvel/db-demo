@@ -1,11 +1,12 @@
 // Thin client for the Go backend described in the spec (/api/status, /api/queries, /api/run).
 // Base URL comes from VITE_API_URL; when the backend is unreachable we fall back to demo data.
 
-export type DbId = "postgres" | "mysql" | "sqlite";
+export type DbId = "postgres" | "mysql" | "sqlite" | "clickhouse";
 export const DBS: { id: DbId; name: string; kind: string }[] = [
   { id: "postgres", name: "PostgreSQL", kind: "client-server" },
   { id: "mysql", name: "MySQL", kind: "client-server" },
   { id: "sqlite", name: "SQLite", kind: "embedded" },
+  { id: "clickhouse", name: "ClickHouse", kind: "columnar OLAP" },
 ];
 
 export type DbStatus = { events: number; users: number; size_bytes: number; error?: string };
@@ -23,7 +24,7 @@ const BASE = (import.meta.env["VITE_API_URL"] as string | undefined)?.replace(/\
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), 100_000);
+  const t = setTimeout(() => ctrl.abort(), 35_000);
   try {
     const r = await fetch(`${BASE}${path}`, {
       ...init,
@@ -48,19 +49,20 @@ const DEMO_QUERIES: QueryInfo[] = [
   { id: "q5", name: "point_lookup", description: "Контрольный: SQLite без сети", sql_preview: "SELECT * FROM events WHERE id = ?" },
 ];
 const DEMO_STATUS: StatusResponse = {
-  postgres: { events: 5_000_000, users: 50_000, size_bytes: 1_020_000_000 },
-  mysql: { events: 5_000_000, users: 50_000, size_bytes: 1_180_000_000 },
-  sqlite: { events: 5_000_000, users: 50_000, size_bytes: 905_000_000 },
+  postgres: { events: 3_000_000, users: 50_000, size_bytes: 612_000_000 },
+  mysql: { events: 3_000_000, users: 50_000, size_bytes: 708_000_000 },
+  sqlite: { events: 3_000_000, users: 50_000, size_bytes: 545_000_000 },
+  clickhouse: { events: 3_000_000, users: 50_000, size_bytes: 118_000_000 },
 };
-const DEMO_LAT: Record<string, [number, number, number]> = {
-  q1: [1240, 980, 2100], q2: [85, 120, 210], q3: [1630, 1410, 2890], q4: [720, 1350, 1980], q5: [0.9, 1.1, 0.05],
+const DEMO_LAT: Record<string, [number, number, number, number]> = {
+  q1: [1240, 980, 2100, 38], q2: [85, 120, 210, 14], q3: [1630, 1410, 2890, 52], q4: [720, 1350, 1980, 96], q5: [0.9, 1.1, 0.05, 24],
 };
-const DEMO_METRIC: Record<string, [string, string, string]> = {
-  q1: ["shared read=45k, hit=2k", "Handler_read_rnd_next=5.0M", "SCAN events"],
-  q2: ["shared read=3.1k, hit=410", "Handler_read_next=412k", "SEARCH events USING INDEX idx_events_created_at"],
-  q3: ["shared read=44k, hit=3k", "Handler_read_next=5.0M", "SCAN events USING INDEX idx_events_user_id"],
-  q4: ["shared read=46k, hit=1.2k", "Handler_read_key=16.7k", "SCAN e; SEARCH u USING INTEGER PRIMARY KEY"],
-  q5: ["shared hit=4", "Handler_read_key=1", "SEARCH events USING INTEGER PRIMARY KEY (rowid=?)"],
+const DEMO_METRIC: Record<string, [string, string, string, string]> = {
+  q1: ["shared read=45k, hit=2k", "Handler_read_rnd_next=5.0M", "SCAN events", "read_rows=3.0M, read_bytes=36 MB"],
+  q2: ["shared read=3.1k, hit=410", "Handler_read_next=412k", "SEARCH events USING INDEX idx_events_created_at", "read_rows=246k, read_bytes=3.9 MB"],
+  q3: ["shared read=44k, hit=3k", "Handler_read_next=5.0M", "SCAN events USING INDEX idx_events_user_id", "read_rows=3.0M, read_bytes=12 MB"],
+  q4: ["shared read=46k, hit=1.2k", "Handler_read_key=16.7k", "SCAN e; SEARCH u USING INTEGER PRIMARY KEY", "read_rows=3.05M, read_bytes=37 MB"],
+  q5: ["shared hit=4", "Handler_read_key=1", "SEARCH events USING INTEGER PRIMARY KEY (rowid=?)", "read_rows=3.0M, read_bytes=24 MB"],
 };
 const DEMO_ROWS: Record<string, Record<string, unknown>[]> = {
   q1: ["click", "view", "purchase", "signup", "logout"].map((t, i) => ({ event_type: t, count: 1_000_000 + i * 731, sum: (50_123_456.78 + i * 9_876).toFixed(2) })),

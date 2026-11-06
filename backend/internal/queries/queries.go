@@ -31,17 +31,26 @@ const (
 	Postgres Dialect = iota
 	MySQL
 	SQLite
+	ClickHouse
 )
 
 func SQLAndArgs(qid string, d Dialect) (sql string, args []any) {
 	switch qid {
 	case "q1":
-		sql = `SELECT event_type, COUNT(*) AS count, SUM(value) AS sum FROM events GROUP BY event_type`
+		switch d {
+		case ClickHouse:
+			sql = `SELECT event_type, count() AS count, sum(value) AS sum FROM events GROUP BY event_type`
+		default:
+			sql = `SELECT event_type, COUNT(*) AS count, SUM(value) AS sum FROM events GROUP BY event_type`
+		}
 		return sql, nil
 	case "q2":
 		switch d {
 		case Postgres:
 			sql = `SELECT user_id, SUM(value) AS sum FROM events WHERE created_at BETWEEN $1::timestamp AND $2::timestamp GROUP BY user_id ORDER BY SUM(value) DESC LIMIT 20`
+			args = []any{Q2Start, Q2End}
+		case ClickHouse:
+			sql = `SELECT user_id, sum(value) AS sum FROM events WHERE created_at BETWEEN toDateTime(?) AND toDateTime(?) GROUP BY user_id ORDER BY sum(value) DESC LIMIT 20`
 			args = []any{Q2Start, Q2End}
 		default:
 			sql = `SELECT user_id, SUM(value) AS sum FROM events WHERE created_at BETWEEN ? AND ? GROUP BY user_id ORDER BY SUM(value) DESC LIMIT 20`
@@ -52,12 +61,20 @@ func SQLAndArgs(qid string, d Dialect) (sql string, args []any) {
 		sql = `SELECT user_id, COUNT(*) AS cnt FROM events GROUP BY user_id ORDER BY cnt DESC LIMIT 10`
 		return sql, nil
 	case "q4":
-		sql = `SELECT u.region, SUM(e.value) AS sum FROM events e JOIN users u ON e.user_id = u.id WHERE u.segment = 'premium' GROUP BY u.region`
+		switch d {
+		case ClickHouse:
+			sql = `SELECT u.region, sum(e.value) AS sum FROM events e JOIN users u ON e.user_id = u.id WHERE u.segment = 'premium' GROUP BY u.region`
+		default:
+			sql = `SELECT u.region, SUM(e.value) AS sum FROM events e JOIN users u ON e.user_id = u.id WHERE u.segment = 'premium' GROUP BY u.region`
+		}
 		return sql, nil
 	case "q5":
 		switch d {
 		case Postgres:
 			sql = `SELECT id, user_id, event_type, created_at, value, payload FROM events WHERE id = $1`
+			args = []any{Q5ID}
+		case ClickHouse:
+			sql = `SELECT id, user_id, event_type, created_at, value, payload FROM events WHERE id = ?`
 			args = []any{Q5ID}
 		default:
 			sql = `SELECT id, user_id, event_type, created_at, value, payload FROM events WHERE id = ?`
@@ -82,6 +99,8 @@ func ExplainMetricSQL(qid string, d Dialect) (sql string, args []any) {
 		return `EXPLAIN ` + qs, a
 	case SQLite:
 		return `EXPLAIN QUERY PLAN ` + qs, a
+	case ClickHouse:
+		return "", nil
 	default:
 		return "", nil
 	}

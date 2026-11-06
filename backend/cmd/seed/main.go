@@ -13,25 +13,26 @@ import (
 	"github.com/dbdemo/backend/internal/config"
 	dbpkg "github.com/dbdemo/backend/internal/db"
 	"github.com/dbdemo/backend/internal/seed"
+	"github.com/jackc/pgx/v5"
 )
 
 func main() {
 	var events, users, batch int64
-	flag.Int64Var(&events, "events", 5_000_000, "number of events")
+	flag.Int64Var(&events, "events", 3_000_000, "number of events")
 	flag.Int64Var(&users, "users", 50_000, "number of users")
 	flag.Int64Var(&batch, "batch-size", 10_000, "batch size for bulk insert")
 	flag.Parse()
 
-	pgDSN, mysqlDSN, sqlitePath, _ := config.FromEnv()
+	pgDSN, mysqlDSN, sqlitePath, chDSN, _ := config.FromEnv()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Hour)
 	defer cancel()
 
-	pg, err := dbpkg.OpenPostgres(pgDSN)
+	pgConn, err := pgx.Connect(ctx, pgDSN)
 	if err != nil {
-		log.Fatalf("postgres: %v", err)
+		log.Fatalf("postgres connect: %v", err)
 	}
-	defer pg.Close()
+	defer pgConn.Close(ctx)
 
 	my, err := dbpkg.OpenMySQL(mysqlDSN)
 	if err != nil {
@@ -48,8 +49,14 @@ func main() {
 	}
 	defer sl.Close()
 
-	log.Println("waiting for postgres and mysql...")
-	if err := seed.WaitHealthy(ctx, pg, my); err != nil {
+	chDB, err := dbpkg.OpenClickHouse(chDSN)
+	if err != nil {
+		log.Fatalf("clickhouse: %v", err)
+	}
+	defer chDB.Close()
+
+	log.Println("waiting for postgres, mysql, and clickhouse...")
+	if err := seed.WaitHealthy(ctx, pgConn, my, chDB); err != nil {
 		log.Fatalf("health: %v", err)
 	}
 
@@ -57,7 +64,7 @@ func main() {
 
 	log.Println("loading postgres...")
 	rng := rand.New(rand.NewSource(42))
-	if err := seed.LoadPostgres(ctx, pg, userRows, events, batch, users, rng); err != nil {
+	if err := seed.LoadPostgres(ctx, pgConn, userRows, events, batch, users, rng); err != nil {
 		log.Fatalf("postgres load: %v", err)
 	}
 
@@ -73,10 +80,22 @@ func main() {
 		log.Fatalf("sqlite load: %v", err)
 	}
 
+	log.Println("loading clickhouse...")
+	rng = rand.New(rand.NewSource(42))
+	if err := seed.LoadClickHouse(ctx, chDSN, userRows, events, batch, users, rng); err != nil {
+		log.Fatalf("clickhouse load: %v", err)
+	}
+
+	pe, pu, err := seed.CountsPostgres(ctx, pgConn)
+	if err != nil {
+		log.Printf("postgres count: %v", err)
+	} else {
+		log.Printf("postgres: events=%d users=%d", pe, pu)
+	}
 	for name, db := range map[string]*dbpkg.Pool{
-		"postgres": {DB: pg},
-		"mysql":    {DB: my},
-		"sqlite":   {DB: sl},
+		"mysql":      {DB: my},
+		"sqlite":     {DB: sl},
+		"clickhouse": {DB: chDB},
 	} {
 		ev, us, err := seed.Counts(ctx, db.DB)
 		if err != nil {

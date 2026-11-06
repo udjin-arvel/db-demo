@@ -10,9 +10,10 @@ import (
 
 // Handler holds DB pools for API methods.
 type Handler struct {
-	PG     *db.Pool
-	MySQL  *db.Pool
-	SQLite *db.Pool
+	PG          *db.Pool
+	MySQL       *db.Pool
+	SQLite      *db.Pool
+	ClickHouse  *db.Pool
 }
 
 func (h *Handler) Status(w http.ResponseWriter, r *http.Request) {
@@ -20,10 +21,12 @@ func (h *Handler) Status(w http.ResponseWriter, r *http.Request) {
 	pg := db.StatusPostgres(ctx, h.PG.DB)
 	my := db.StatusMySQL(ctx, h.MySQL.DB)
 	sl := db.StatusSQLite(ctx, h.SQLite.DB)
+	ch := db.StatusClickHouse(ctx, h.ClickHouse.DB)
 	resp := map[string]any{
-		"postgres": statusJSON(pg),
-		"mysql":    statusJSON(my),
-		"sqlite":   statusJSON(sl),
+		"postgres":   statusJSON(pg),
+		"mysql":      statusJSON(my),
+		"sqlite":     statusJSON(sl),
+		"clickhouse": statusJSON(ch),
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)
@@ -65,6 +68,8 @@ func (h *Handler) Run(w http.ResponseWriter, r *http.Request) {
 		d, pool = queries.MySQL, h.MySQL
 	case "sqlite":
 		d, pool = queries.SQLite, h.SQLite
+	case "clickhouse":
+		d, pool = queries.ClickHouse, h.ClickHouse
 	default:
 		http.Error(w, `{"error":"invalid db"}`, http.StatusBadRequest)
 		return

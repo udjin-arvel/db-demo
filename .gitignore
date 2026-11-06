@@ -5,9 +5,9 @@ data/
 
 # Dependencies & build output
 **/node_modules/
-client/.output/
-client/.nitro/
-client/dist/
+frontend/.output/
+frontend/.nitro/
+frontend/dist/
 
 # Go binaries & caches
 backend/bin/
